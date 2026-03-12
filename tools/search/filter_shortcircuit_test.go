@@ -611,6 +611,191 @@ func TestTryShortCircuitOrNested(t *testing.T) {
 	}
 }
 
+func TestBranchToString(t *testing.T) {
+	scenarios := []struct {
+		name     string
+		filter   string
+		branchN  int
+		expected string
+	}{
+		{
+			"simple equality",
+			`@request.auth.id != ""`,
+			0,
+			`@request.auth.id != ""`,
+		},
+		{
+			"AND chain",
+			`@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays"`,
+			0,
+			`@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays"`,
+		},
+		{
+			"first OR branch",
+			`@request.auth.collectionName = "bots" || status = "active"`,
+			0,
+			`@request.auth.collectionName = "bots"`,
+		},
+		{
+			"number literal",
+			`@request.auth.verified = 1`,
+			0,
+			`@request.auth.verified = 1`,
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			data, err := fexpr.Parse(s.filter)
+			if err != nil {
+				t.Fatalf("failed to parse filter %q: %v", s.filter, err)
+			}
+
+			branches := splitTopLevelOrs(data)
+			if s.branchN >= len(branches) {
+				t.Fatalf("branch %d out of range (have %d branches)", s.branchN, len(branches))
+			}
+
+			result := branchToString(branches[s.branchN])
+			if result != s.expected {
+				t.Fatalf("expected %q, got %q", s.expected, result)
+			}
+		})
+	}
+}
+
+func TestAnalyzeCheapBranches(t *testing.T) {
+	scenarios := []struct {
+		name               string
+		rule               string
+		expectedCount      int
+		expectedExprs      []string // expected expression strings
+	}{
+		{
+			"empty rule",
+			"",
+			0,
+			nil,
+		},
+		{
+			"no OR, no cheap branches",
+			`status = "active"`,
+			0,
+			nil,
+		},
+		{
+			"top-level cheap OR branch",
+			`@request.auth.id != "" || status = "active"`,
+			1,
+			[]string{`@request.auth.id != ""`},
+		},
+		{
+			"two top-level cheap branches",
+			`@request.auth.id != "" || @request.method = "GET" || status = "active"`,
+			2,
+			[]string{`@request.auth.id != ""`, `@request.method = "GET"`},
+		},
+		{
+			"nested cheap branch",
+			`@request.auth.id != "" && ((@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays") || @collection.relay_roles.user = @request.auth.id)`,
+			1,
+			[]string{`(@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays")`},
+		},
+		{
+			"no cheap branches (all expensive)",
+			`@collection.relay_roles.user = @request.auth.id || status = "active"`,
+			0,
+			nil,
+		},
+		{
+			"all cheap, no expensive",
+			`@request.auth.id != "" || @request.method = "GET"`,
+			2,
+			[]string{`@request.auth.id != ""`, `@request.method = "GET"`},
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			result, err := AnalyzeCheapBranches(s.rule)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(result) != s.expectedCount {
+				t.Fatalf("expected %d cheap branches, got %d: %+v", s.expectedCount, len(result), result)
+			}
+
+			for i, expected := range s.expectedExprs {
+				if result[i].Expression != expected {
+					t.Errorf("branch %d: expected %q, got %q", i, expected, result[i].Expression)
+				}
+			}
+		})
+	}
+}
+
+func TestStripCheapBranches(t *testing.T) {
+	scenarios := []struct {
+		name     string
+		rule     string
+		expected string
+	}{
+		{
+			"empty rule",
+			"",
+			"",
+		},
+		{
+			"no cheap branches — unchanged",
+			`status = "active"`,
+			`status = "active"`,
+		},
+		{
+			"top-level: cheap || expensive → expensive only",
+			`@request.auth.id != "" || status = "active"`,
+			`status = "active"`,
+		},
+		{
+			"top-level: cheap || cheap → empty (all cheap)",
+			`@request.auth.id != "" || @request.method = "GET"`,
+			"",
+		},
+		{
+			"top-level: expensive || cheap → expensive only",
+			`@collection.relay_roles.user = @request.auth.id || @request.auth.collectionName = "bots"`,
+			`@collection.relay_roles.user = @request.auth.id`,
+		},
+		{
+			"nested: A && (cheap || expensive) → A && (expensive)",
+			`@request.auth.id != "" && (@request.auth.collectionName = "bots" || @collection.relay_roles.user = @request.auth.id)`,
+			`@request.auth.id != "" && (@collection.relay_roles.user = @request.auth.id)`,
+		},
+		{
+			"nested: A && (cheap || cheap) → A (group removed)",
+			`status = "active" && (@request.auth.id != "" || @request.method = "GET")`,
+			`status = "active"`,
+		},
+		{
+			"no ORs at all — unchanged",
+			`@request.auth.id != "" && status = "active"`,
+			`@request.auth.id != "" && status = "active"`,
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			result, err := StripCheapBranches(s.rule)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result != s.expected {
+				t.Fatalf("expected %q, got %q", s.expected, result)
+			}
+		})
+	}
+}
+
 func TestResolveStaticIdentifier(t *testing.T) {
 	staticData := map[string]any{
 		"context": "default",

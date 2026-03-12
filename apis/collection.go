@@ -3,6 +3,7 @@ package apis
 import (
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 
 	validation "github.com/go-ozzo/ozzo-validation/v4"
@@ -23,6 +24,7 @@ func bindCollectionApi(app core.App, rg *router.RouterGroup[*core.RequestEvent])
 	subGroup.DELETE("/{collection}/truncate", collectionTruncate)
 	subGroup.PUT("/import", collectionsImport)
 	subGroup.GET("/meta/scaffolds", collectionScaffolds)
+	subGroup.POST("/{collection}/render-rule", collectionRenderRule)
 }
 
 func collectionsList(e *core.RequestEvent) error {
@@ -206,4 +208,119 @@ func collectionScaffolds(e *core.RequestEvent) error {
 	}
 
 	return e.JSON(http.StatusOK, collections)
+}
+
+func collectionRenderRule(e *core.RequestEvent) error {
+	collection, err := e.App.FindCachedCollectionByNameOrId(e.Request.PathValue("collection"))
+	if err != nil || collection == nil {
+		return e.NotFoundError("", err)
+	}
+
+	form := struct {
+		Rule             string `json:"rule"`
+		AuthCollectionId string `json:"authCollectionId"`
+		AuthId           string `json:"authId"`
+		Explain          bool   `json:"explain"`
+	}{}
+	if err := e.BindBody(&form); err != nil {
+		return e.BadRequestError("Failed to load the submitted data due to invalid formatting.", err)
+	}
+
+	if form.Rule == "" {
+		return e.BadRequestError("Rule is required.", nil)
+	}
+
+	// resolve auth record
+	var authRecord *core.Record
+	if form.AuthCollectionId != "" {
+		authCol, err := e.App.FindCachedCollectionByNameOrId(form.AuthCollectionId)
+		if err != nil {
+			return e.BadRequestError("Invalid auth collection.", err)
+		}
+		if form.AuthId != "" {
+			authRecord, err = e.App.FindRecordById(authCol, form.AuthId)
+			if err != nil {
+				return e.BadRequestError("Auth record not found.", err)
+			}
+		} else {
+			// use first available record for convenience
+			var records []*core.Record
+			e.App.RecordQuery(authCol).Limit(1).All(&records)
+			if len(records) > 0 {
+				authRecord = records[0]
+			}
+		}
+	}
+
+	info := &core.RequestInfo{
+		Auth:    authRecord,
+		Method:  "GET",
+		Context: "default",
+		Query:   map[string]string{},
+		Headers: map[string]string{},
+		Body:    map[string]any{},
+	}
+
+	cheapBranches, _ := search.AnalyzeCheapBranches(form.Rule)
+
+	// 1. Full SQL — compile the complete rule (parameterized by auth context)
+	fullResolver := core.NewRecordFieldResolver(e.App, collection, info, true)
+	fullExpr, err := search.FilterData(form.Rule).BuildExpr(fullResolver)
+	if err != nil {
+		return e.BadRequestError("Failed to build rule expression.", err)
+	}
+	fullQuery := e.App.RecordQuery(collection)
+	fullQuery.AndWhere(fullExpr)
+	if err := fullResolver.UpdateQuery(fullQuery); err != nil {
+		return e.BadRequestError("Failed to resolve rule query.", err)
+	}
+	fullSQL := fullQuery.Build().SQL()
+
+	// 2. Worst-case SQL — strip cheap @request.* OR branches
+	worstCaseSQL := fullSQL
+	strippedRule, _ := search.StripCheapBranches(form.Rule)
+	if strippedRule != "" {
+		wcResolver := core.NewRecordFieldResolver(e.App, collection, info, true)
+		if wcExpr, err := search.FilterData(strippedRule).BuildExpr(wcResolver); err == nil {
+			wcQuery := e.App.RecordQuery(collection)
+			wcQuery.AndWhere(wcExpr)
+			if err := wcResolver.UpdateQuery(wcQuery); err == nil {
+				worstCaseSQL = wcQuery.Build().SQL()
+			}
+		}
+	}
+
+	if !form.Explain {
+		return e.JSON(http.StatusOK, map[string]any{
+			"sql":           fullSQL,
+			"worstCaseSql":  worstCaseSQL,
+			"cheapBranches": cheapBranches,
+		})
+	}
+
+	// 3. EXPLAIN on the worst-case SQL
+	eqpSQL := regexp.MustCompile(`\{:[\w]+\}`).ReplaceAllString(worstCaseSQL, "''")
+
+	type eqpRow struct {
+		Id      int    `db:"id" json:"id"`
+		Parent  int    `db:"parent" json:"parent"`
+		Notused int    `db:"notused" json:"notused"`
+		Detail  string `db:"detail" json:"detail"`
+	}
+	var eqpRows []eqpRow
+	if err := e.App.ConcurrentDB().NewQuery("EXPLAIN QUERY PLAN " + eqpSQL).All(&eqpRows); err != nil {
+		return e.JSON(http.StatusOK, map[string]any{
+			"sql":           fullSQL,
+			"worstCaseSql":  worstCaseSQL,
+			"explain":       nil,
+			"cheapBranches": cheapBranches,
+		})
+	}
+
+	return e.JSON(http.StatusOK, map[string]any{
+		"sql":           fullSQL,
+		"worstCaseSql":  worstCaseSQL,
+		"explain":       eqpRows,
+		"cheapBranches": cheapBranches,
+	})
 }
