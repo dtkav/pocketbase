@@ -32,7 +32,7 @@ button {
     text-decoration: none;
     line-height: 1;
     font-weight: 600;
-    color: #fff;
+    color: var(--baseColor);
     font-size: var(--baseFontSize);
     font-family: var(--baseFontFamily);
     border-radius: var(--btnRadius);
@@ -114,7 +114,7 @@ button {
     // secondary/bordered styles
     &.btn-outline {
         border: 2px solid currentColor;
-        background: #fff;
+        background: transparent;
     }
 
     @mixin btnOpacity($base: 1, $hover: 1, $active: 1) {
@@ -594,6 +594,9 @@ select {
         pre {
             white-space: pre-wrap;
         }
+        button {
+            color: inherit;
+        }
     }
     .help-block-error {
         color: var(--dangerColor);
@@ -633,7 +636,7 @@ select {
     }
     &.disabled {
         label, %input {
-            box-shadow: inset 0 0 0 var(--btnHeight) rgba(#fff, 0.45);
+            box-shadow: inset 0 0 0 var(--btnHeight) var(--overlayColor);
         }
         > label {
             color: var(--txtDisabledColor);
@@ -829,7 +832,7 @@ select {
             }
             &:checked ~ label {
                 &:before {
-                    background: var(--successColor);
+                    background: var(--primaryColor);
                 }
                 &:after {
                     background: var(--baseColor);
@@ -1247,15 +1250,15 @@ select {
         min-height: 0;
         border: 0 !important;
         outline: none !important;
+        color: #ABB2BF;
         .cm-line {
             padding-left: 0;
             padding-right: 0;
         }
         .cm-tooltip-autocomplete {
-            @include shadowize();
+            background-color: var(--tooltipColor);
+            border: 1px solid var(--baseAlt2Color);
             border-radius: var(--baseRadius);
-            background: var(--baseColor);
-            border: 0;
             z-index: 9999;
             padding: 0 3px;
             font-size: 0.92rem;
@@ -1271,8 +1274,13 @@ select {
                     border-bottom-right-radius: inherit;
                 }
             }
+            ul li {
+                padding: .4em .8em;
+                border-radius: var(--btnRadius) !important;
+            }
             ul li[aria-selected] {
-                background: var(--infoColor);
+                background: var(--primaryColor);
+                color: var(--bodyColor);
             }
         }
         .cm-scroller {
@@ -1303,6 +1311,17 @@ select {
     }
     .ͼf {
         color: var(--dangerColor);
+    }
+    // CodeMirror dark theme syntax colors
+    .ͼb {
+        color: #E5C07B !important;
+    }
+    .ͼe {
+        color: #98C379;
+    }
+    .ͼc,
+    .ͼd {
+        color: #D19A66;
     }
     .form-field label ~ & {
         padding-bottom: 6px;
@@ -1339,18 +1358,35 @@ select {
             left: 2px;
             right: 2px;
             bottom: 2px;
-            background: #fff;
+            background: var(--baseColor);
             border-radius: var(--baseRadius);
         }
     }
 }
 body {
+    .tox {
+        color: var(--txtHintColor) !important;
+    }
+
     .tox .tox-dialog {
-        border: 0;
+        background-color: var(--baseColor);
+        border-color: var(--baseAlt2Color);
+        box-shadow: 0 16px 16px -10px rgb(0 0 0 / 50%), 0 0 40px 1px rgb(0 0 0 / 40%);
         border-radius: var(--baseRadius);
     }
     .tox .tox-dialog-wrap__backdrop {
         background: var(--overlayColor);
+    }
+
+    .tox .tox-dialog__header,
+    .tox .tox-dialog__footer {
+        background-color: var(--baseColor);
+        color: inherit;
+        border-color: var(--baseAlt2Color);
+    }
+
+    .tox .tox-dialog__body {
+        color: inherit;
     }
     .tox .tox-tbtn {
         height: 30px;
@@ -1367,17 +1403,201 @@ body {
     .tox .tox-tbtn:not(.tox-tbtn--select) {
         width: 30px;
     }
-    .tox .tox-button,
-    .tox .tox-button--secondary {
+    .tox .tox-button {
+        background-color: var(--primaryColor);
+        color: var(--baseColor);
         font-size: var(--smFontSize);
     }
+
+    .tox .tox-button:hover:not(:disabled) {
+        background-color: var(--successAltColor);
+        color: var(--txtPrimaryColor);
+    }
+
+    .tox .tox-button--secondary {
+        background-color: transparent;
+        color: var(--txtPrimaryColor);
+        border: none;
+        font-size: var(--smFontSize);
+    }
+
+    .tox .tox-button--secondary:hover:not(:disabled) {
+        background-color: var(--baseAlt1Color);
+        color: var(--txtPrimaryColor);
+    }
+
+    .tox .tox-button--naked {
+        background-color: transparent;
+        color: inherit;
+        border-color: transparent;
+    }
+
+    .tox .tox-button--naked:hover:not(:disabled) {
+        background-color: var(--baseAlt1Color);
+        color: inherit;
+        border-color: transparent;
+    }
+
+    .tox .tox-button--naked.tox-button--icon:hover:not(:disabled) {
+        color: inherit;
+    }
+
+    .tox .tox-label,
+    .tox .tox-toolbar-label {
+        color: var(--txtDisabledColor);
+    }
     .tox .tox-toolbar-overlord {
+        background-color: var(--baseColor);
         @include shadowize();
     }
-    .tox .tox-listboxfield .tox-listbox--select,
-    .tox .tox-textarea, .tox .tox-textfield,
-    .tox .tox-toolbar-textfield {
+
+    .tox .tox-toolbar,
+    .tox .tox-toolbar__overflow,
+    .tox .tox-toolbar__primary {
+        background-color: var(--baseColor);
+    }
+
+    .tox .tox-statusbar {
+        background-color: var(--baseColor);
+        border-color: var(--baseAlt2Color);
+        color: inherit;
+    }
+
+    .tox:not([dir=rtl]) .tox-toolbar__group:not(:last-of-type) {
+        border-color: var(--baseAlt2Color);
+    }
+
+    .tox .tox-statusbar a,
+    .tox .tox-statusbar__path-item,
+    .tox .tox-statusbar__wordcount {
+        color: inherit;
+    }
+
+    .tox .tox-split-button:focus {
+        background-color: transparent;
+        color: inherit;
+    }
+
+    .tox .tox-tbtn {
+        color: inherit;
+    }
+
+    .tox .tox-tbtn:hover {
+        background-color: var(--baseAlt2Color);
+        color: inherit;
+    }
+
+    .tox .tox-tbtn--enabled,
+    .tox .tox-tbtn--enabled:hover,
+    .tox .tox-tbtn:focus,
+    .tox .tox-tbtn:focus:not(.tox-tbtn--disabled),
+    .tox .tox-tbtn:active {
+        background-color: var(--baseAlt4Color);
+        color: inherit;
+    }
+
+    .tox :not(svg):not(rect) {
+        fill: currentColor;
+    }
+
+    .tox .tox-split-button:hover {
+        box-shadow: 0 0 0 1px var(--baseAlt2Color) inset;
+    }
+
+    .tox .tox-swatch {
+        color: transparent;
+    }
+
+    .tox .tox-swatch:focus,
+    .tox .tox-swatch:hover {
+        box-shadow: 0 0 0 1px var(--txtHintColor) inset;
+    }
+
+    .tox .tox-swatches__picker-btn {
+        background-color: var(--baseAlt4Color);
+        border-radius: 100vmax;
+    }
+
+    .tox .tox-menu {
+        background-color: var(--baseColor);
+        border-color: var(--baseAlt2Color);
+    }
+
+    .tox .tox-collection__item {
+        color: inherit;
+    }
+
+    .tox .tox-collection__item s {
+        text-decoration-color: inherit !important;
+    }
+
+    .tox .tox-collection__item code {
+        background-color: var(--baseAlt4Color) !important;
+    }
+
+    .tox .tox-collection--list .tox-collection__item--active:not(.tox-collection__item--state-disabled) {
+        color: inherit;
+    }
+
+    .tox .tox-collection--list .tox-collection__item--active {
+        background-color: var(--baseAlt2Color);
+    }
+
+    .tox .tox-collection--list .tox-collection__item--enabled {
+        background-color: var(--baseAlt4Color);
+        color: inherit;
+    }
+
+    .tox .tox-collection--list .tox-collection__group {
+        border-color: var(--baseAlt2Color);
+    }
+
+    .tox .tox-insert-table-picker > div {
+        border-color: var(--baseAlt2Color);
+    }
+
+    .tox .tox-insert-table-picker .tox-insert-table-picker__selected {
+        background-color: var(--baseAlt2Color);
+        border-color: var(--txtDisabledColor);
+    }
+
+    .tox .tox-insert-table-picker__label {
+        color: inherit;
+    }
+    .tox .tox-selectfield select {
+        background-color: transparent;
+        color: inherit;
+        border-color: var(--baseAlt2Color);
+        color-scheme: dark !important;
         padding: 3px 5px;
+    }
+
+    .tox .tox-selectfield select:focus {
+        background-color: transparent;
+        color: inherit;
+        border-color: var(--txtDisabledColor);
+    }
+
+    .tox .tox-selectfield select option {
+        color: inherit;
+        background-color: var(--tooltipColor);
+    }
+
+    .tox .tox-listboxfield .tox-listbox--select,
+    .tox .tox-textarea,
+    .tox .tox-textfield,
+    .tox .tox-toolbar-textfield {
+        background-color: transparent;
+        color: inherit;
+        border-color: var(--baseAlt2Color);
+        padding: 3px 5px;
+    }
+
+    .tox .tox-listboxfield .tox-listbox--select:focus,
+    .tox .tox-textarea:focus,
+    .tox .tox-textfield:focus {
+        background-color: transparent;
+        border-color: var(--txtDisabledColor);
     }
     .tox-swatch:not(.tox-swatch--remove):not(.tox-collection__item--enabled) {
         svg {

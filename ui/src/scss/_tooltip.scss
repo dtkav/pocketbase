@@ -6,7 +6,7 @@
     display: inline-block;
     vertical-align: top;
     max-width: 275px;
-    padding: 3px 5px;
+    padding: .4em .8em;
     color: #fff;
     text-align: center;
     font-family: var(--baseFontFamily);
@@ -14,6 +14,8 @@
     line-height: var(--smLineHeight);
     border-radius: var(--baseRadius);
     background: var(--tooltipColor);
+    box-shadow: 0 0 16px rgb(0 0 0 / 40%);
+    border: 1px solid var(--baseAlt2Color);
     pointer-events: none;
     user-select: none;
     transition: opacity var(--baseAnimationSpeed),

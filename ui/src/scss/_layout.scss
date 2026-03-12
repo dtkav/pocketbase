@@ -45,6 +45,7 @@
         &.current-route {
             background: var(--baseColor);
             border-color: var(--primaryColor);
+            color: var(--primaryColor);
         }
     }
 }
@@ -212,6 +213,10 @@
             background: var(--baseAlt2Color);
             transition-duration: var(--activeAnimationSpeed);
         }
+        &.active {
+            box-shadow: inset 0 0 0 1px var(--baseAlt2Color);
+            background-color: var(--baseAlt1Color);
+        }
     }
     .sidebar-content-compact .sidebar-list-item {
         --sidebarListItemMargin: 5px;
@@ -255,7 +260,7 @@
     }
 }
 .page-header-wrapper {
-    background: var(--baseColor);
+    background: rgb(31, 31, 31);
     width: auto;
     margin-top: calc(-1*(var(--baseSpacing) - 5px));
     margin-left: calc(-1* var(--baseSpacing));

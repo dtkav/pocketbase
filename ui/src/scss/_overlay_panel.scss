@@ -79,9 +79,9 @@
             border-bottom-left-radius: 50%;
             border-top-right-radius: 0;
             border-bottom-right-radius: 0;
-            color: #fff;
+            color: var(--bodyColor);
             background: var(--primaryColor);
-            opacity: 0.5;
+            opacity: 1;
             transition: opacity var(--baseAnimationSpeed);
             user-select: none;
             i {

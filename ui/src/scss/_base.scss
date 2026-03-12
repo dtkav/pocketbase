@@ -12,6 +12,7 @@ body {
     font-size: var(--baseFontSize);
     color: var(--txtPrimaryColor);
     background: var(--bodyColor);
+    caret-color: var(--txtPrimaryColor);
 }
 
 #app {
@@ -140,6 +141,15 @@ code {
     background: var(--baseAlt1Color);
 }
 
+.code-wrapper {
+    border: 1px solid var(--baseAlt2Color);
+    border-radius: var(--baseRadius);
+
+    > code {
+        color: #E5C07B !important;
+    }
+}
+
 ol,
 ul {
     margin: 10px 0;
@@ -159,12 +169,17 @@ img {
     vertical-align: top;
 }
 
+mark {
+    color: inherit;
+    padding: 0 .3em;
+}
+
 hr {
     display: block;
     border: 0;
     height: 1px;
     width: 100%;
-    background: var(--baseAlt1Color);
+    background: var(--baseAlt2Color);
     margin: var(--baseSpacing) 0;
     &.dark {
         background: var(--baseAlt2Color);
@@ -365,7 +380,7 @@ a,
     background: var(--baseColor);
     border-radius: var(--lgRadius);
     padding: calc(var(--baseSpacing) - 5px) var(--baseSpacing);
-    @include shadowize();
+    box-shadow: none;
 }
 
 .sub-panel {
@@ -477,6 +492,8 @@ a,
 
 .thumb {
     --thumbSize: 40px;
+    --tile-color: var(--baseAlt1Color);
+    --tile-size: 12px;
 
     display: inline-flex;
     vertical-align: top;
@@ -488,7 +505,10 @@ a,
     width: var(--thumbSize);
     height: var(--thumbSize);
     aspect-ratio: 1;
-    background: var(--baseAlt2Color);
+    background-color: var(--baseAlt2Color);
+    background-image: linear-gradient(45deg, var(--tile-color) 25%, transparent 25%, transparent 75%, var(--tile-color) 75%, var(--tile-color)), linear-gradient(45deg, var(--tile-color) 25%, transparent 25%, transparent 75%, var(--tile-color) 75%, var(--tile-color));
+    background-size: var(--tile-size) var(--tile-size);
+    background-position: 0 0, calc(var(--tile-size) / 2) calc(var(--tile-size) / 2);
     border-radius: var(--baseRadius);
     color: var(--txtPrimaryColor);
     outline-offset: -2px;
@@ -593,7 +613,7 @@ a.thumb:not(.thumb-active) {
     }
     &.label-primary {
         color: var(--baseColor);
-        background: var(--primaryColor);
+        background: var(--txtPrimaryColor);
     }
     &.label-info {
         background: var(--infoAltColor);
@@ -784,6 +804,22 @@ a.thumb:not(.thumb-active) {
     }
 }
 
+.chart-canvas {
+    filter: invert(.8) hue-rotate(345deg);
+}
+
+.unlock-overlay {
+    background-color: rgba(0, 0, 0, .2) !important;
+}
+
+.lock-toggle {
+    background-color: var(--baseAlt2Color) !important;
+}
+
+.highlighted-title .link-primary {
+    color: var(--txtPrimaryColor) !important;
+}
+
 .list {
     @extend %block;
     position: relative;
@@ -937,7 +973,7 @@ a.thumb:not(.thumb-active) {
     padding: 5px 10px;
     min-height: var(--lgBtnHeight);
     border-radius: var(--baseRadius);
-    border: 1px solid var(--baseAlt1Color);
+    border: 1px solid var(--baseAlt2Color);
     .content {
         line-height: var(--smLineHeight);
     }
@@ -1124,6 +1160,9 @@ a.thumb:not(.thumb-active) {
         &.active {
             color: var(--txtPrimaryColor);
             background: var(--baseAlt1Color);
+        }
+        &.active {
+            box-shadow: inset 0 0 0 1px var(--baseAlt2Color);
         }
         &:active {
             background: var(--baseAlt2Color);

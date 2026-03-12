@@ -19,6 +19,7 @@ $tabContentAnimationSpeed: 0.2s;
     min-height: 50px;
     user-select: none;
     margin: 0 0 var(--baseSpacing);
+    margin-bottom: -1px !important;
     border-bottom: 2px solid var(--baseAlt2Color);
     .tab-item {
         position: relative;
@@ -73,6 +74,9 @@ $tabContentAnimationSpeed: 0.2s;
         }
         &.active {
             color: var(--txtPrimaryColor);
+            border: 1px solid var(--baseAlt2Color);
+            border-bottom: none;
+            z-index: 1;
             &:after {
                 transform: rotateY(0deg);
             }
@@ -145,4 +149,9 @@ $tabContentAnimationSpeed: 0.2s;
 .tabs {
     @extend %block;
     position: relative;
+
+    .code-wrapper,
+    .code-wrapper > code {
+        border-top-left-radius: 0;
+    }
 }

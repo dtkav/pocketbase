@@ -44,15 +44,17 @@
 
         // states
         &:focus-visible,
-        &:hover,
-        &:active,
-        &.active {
-            color: var(--txtPrimaryColor);
+        &:hover {
             background: var(--baseAlt1Color);
         }
         &:active {
             background: var(--baseAlt2Color);
             transition-duration: var(--activeAnimationSpeed);
+        }
+        &.active {
+            box-shadow: inset 0 0 0 1px var(--baseAlt2Color);
+            background-color: var(--baseAlt1Color);
+            color: var(--txtPrimaryColor);
         }
         &.disabled {
             cursor: not-allowed;

@@ -30,7 +30,7 @@
         font-size: 1.2em;
         padding-right: $gap;
         font-weight: normal;
-        border-right: 1px solid rgba(#000, 0.05);
+        border-right: 1px solid rgba(255, 255, 255, .2);
         color: var(--txtHintColor);
     }
     .close {
@@ -64,7 +64,7 @@
 
     code,
     hr {
-        background: rgba(#000, 0.1);
+        background: rgba(255, 255, 255, .1);
     }
 
     // styles
