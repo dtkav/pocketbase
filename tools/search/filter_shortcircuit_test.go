@@ -273,8 +273,20 @@ func TestEvaluateCheapBranch(t *testing.T) {
 			false,
 		},
 		{
-			"nil auth field resolves to <nil>",
+			"nil auth field does not match equality",
 			`@request.auth.collectionName = "bots"`,
+			noAuthData,
+			false,
+		},
+		{
+			"nil auth id does not satisfy not-empty guard",
+			`@request.auth.id != ""`,
+			noAuthData,
+			false,
+		},
+		{
+			"nil auth field does not match inequality",
+			`@request.auth.collectionName != "users"`,
 			noAuthData,
 			false,
 		},
@@ -327,6 +339,12 @@ func TestTryShortCircuitOr(t *testing.T) {
 		},
 	}
 
+	noAuthData := map[string]any{
+		"context": "default",
+		"method":  "GET",
+		"auth":    nil,
+	}
+
 	scenarios := []struct {
 		name              string
 		filter            string
@@ -336,7 +354,7 @@ func TestTryShortCircuitOr(t *testing.T) {
 		expectRemainCount int  // len(remaining) when not nil
 	}{
 		{
-			"no OR → no optimization",
+			"no OR - no optimization",
 			`@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays"`,
 			botData,
 			false,
@@ -344,7 +362,7 @@ func TestTryShortCircuitOr(t *testing.T) {
 			0,
 		},
 		{
-			"bot matches cheap branch → passed",
+			"bot matches cheap branch - passed",
 			`@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays" || @collection.relay_roles.user = @request.auth.id`,
 			botData,
 			true,
@@ -352,7 +370,7 @@ func TestTryShortCircuitOr(t *testing.T) {
 			0,
 		},
 		{
-			"human fails cheap branch → only expensive remains",
+			"human fails cheap branch - only expensive remains",
 			`@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays" || @collection.relay_roles.user = @request.auth.id`,
 			humanData,
 			false,
@@ -360,7 +378,7 @@ func TestTryShortCircuitOr(t *testing.T) {
 			1, // just the expensive branch with one ExprGroup
 		},
 		{
-			"no cheap branches → no optimization",
+			"no cheap branches - no optimization",
 			`@collection.relay_roles.user = @request.auth.id || status = "active"`,
 			botData,
 			false,
@@ -368,7 +386,7 @@ func TestTryShortCircuitOr(t *testing.T) {
 			0,
 		},
 		{
-			"all cheap branches, none match → empty remaining",
+			"all cheap branches, none match - empty remaining",
 			`@request.auth.collectionName = "bots" || @request.auth.collectionName = "admin"`,
 			humanData,
 			false,
@@ -376,7 +394,7 @@ func TestTryShortCircuitOr(t *testing.T) {
 			0,
 		},
 		{
-			"all cheap, first matches → passed",
+			"all cheap, first matches - passed",
 			`@request.auth.collectionName = "bots" || @request.auth.collectionName = "users"`,
 			botData,
 			true,
@@ -398,6 +416,14 @@ func TestTryShortCircuitOr(t *testing.T) {
 			false,
 			false,
 			1, // just the expensive branch
+		},
+		{
+			"guest fails generated relation rule auth branch",
+			`id = "" || (@request.auth.id != "" && @request.auth.collectionName != "users")`,
+			noAuthData,
+			false,
+			false,
+			1, // just the always-empty id branch
 		},
 	}
 
@@ -492,7 +518,7 @@ func TestTryShortCircuitOrNested(t *testing.T) {
 		expectRemainCount int
 	}{
 		{
-			// A && (cheap_true || expensive) → remaining = [A]
+			// A && (cheap_true || expensive) -> remaining = [A]
 			"nested: bot matches cheap branch inside group",
 			`@request.auth.verified = true && ((@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays") || @collection.relay_roles.user = @request.auth.id)`,
 			botData,
@@ -501,7 +527,7 @@ func TestTryShortCircuitOrNested(t *testing.T) {
 			1, // just the @request.auth.verified expression
 		},
 		{
-			// A && (cheap_false || expensive) → remaining = [A, (expensive)]
+			// A && (cheap_false || expensive) -> remaining = [A, (expensive)]
 			"nested: human fails cheap branch, expensive remains",
 			`@request.auth.verified = true && ((@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays") || @collection.relay_roles.user = @request.auth.id)`,
 			humanData,
@@ -510,8 +536,8 @@ func TestTryShortCircuitOrNested(t *testing.T) {
 			2, // verified expression + simplified group
 		},
 		{
-			// A && (cheap_true || cheap_false) → remaining = [A]
-			"nested: all cheap, one matches → group true, remove from AND chain",
+			// A && (cheap_true || cheap_false) -> remaining = [A]
+			"nested: all cheap, one matches - group true, remove from AND chain",
 			`@request.auth.verified = true && (@request.auth.collectionName = "bots" || @request.auth.collectionName = "admin")`,
 			botData,
 			false,
@@ -519,17 +545,17 @@ func TestTryShortCircuitOrNested(t *testing.T) {
 			1, // just verified
 		},
 		{
-			// A && (cheap_false || cheap_false) → false
-			"nested: all cheap, none match → AND chain is false",
+			// A && (cheap_false || cheap_false) -> false
+			"nested: all cheap, none match - AND chain is false",
 			`@request.auth.verified = true && (@request.auth.collectionName = "bots" || @request.auth.collectionName = "admin")`,
 			humanData,
 			false,
 			false,
-			0, // empty remaining → false
+			0, // empty remaining -> false
 		},
 		{
 			// (cheap_true || expensive) - only group, no other top-level terms
-			"nested: only group, cheap matches → passed",
+			"nested: only group, cheap matches - passed",
 			`((@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays") || @collection.relay_roles.user = @request.auth.id)`,
 			botData,
 			true,
@@ -537,7 +563,7 @@ func TestTryShortCircuitOrNested(t *testing.T) {
 			0,
 		},
 		{
-			"nested: no cheap branches in group → no optimization",
+			"nested: no cheap branches in group - no optimization",
 			`@request.auth.verified = true && (@collection.relay_roles.user = @request.auth.id || creator = @request.auth.id)`,
 			botData,
 			false,
@@ -554,7 +580,7 @@ func TestTryShortCircuitOrNested(t *testing.T) {
 			1, // just auth.id != ""
 		},
 		{
-			// Real relays viewRule pattern: human → remove cheap branch, keep expensive + record
+			// Real relays viewRule pattern: human -> remove cheap branch, keep expensive + record
 			"nested: relays viewRule with bot - human",
 			`@request.auth.id != "" && ((@collection.relay_roles:rr.user ?= @request.auth.id && @collection.relay_roles:rr.relay ?= id) || creator = @request.auth.id || (@request.auth.collectionName = "bots" && @request.auth.scopes ~ "relays"))`,
 			humanData,
@@ -747,37 +773,37 @@ func TestStripCheapBranches(t *testing.T) {
 			"",
 		},
 		{
-			"no cheap branches — unchanged",
+			"no cheap branches - unchanged",
 			`status = "active"`,
 			`status = "active"`,
 		},
 		{
-			"top-level: cheap || expensive → expensive only",
+			"top-level: cheap || expensive - expensive only",
 			`@request.auth.id != "" || status = "active"`,
 			`status = "active"`,
 		},
 		{
-			"top-level: cheap || cheap → empty (all cheap)",
+			"top-level: cheap || cheap - empty (all cheap)",
 			`@request.auth.id != "" || @request.method = "GET"`,
 			"",
 		},
 		{
-			"top-level: expensive || cheap → expensive only",
+			"top-level: expensive || cheap - expensive only",
 			`@collection.relay_roles.user = @request.auth.id || @request.auth.collectionName = "bots"`,
 			`@collection.relay_roles.user = @request.auth.id`,
 		},
 		{
-			"nested: A && (cheap || expensive) → A && (expensive)",
+			"nested: A && (cheap || expensive) - A && (expensive)",
 			`@request.auth.id != "" && (@request.auth.collectionName = "bots" || @collection.relay_roles.user = @request.auth.id)`,
 			`@request.auth.id != "" && (@collection.relay_roles.user = @request.auth.id)`,
 		},
 		{
-			"nested: A && (cheap || cheap) → A (group removed)",
+			"nested: A && (cheap || cheap) - A (group removed)",
 			`status = "active" && (@request.auth.id != "" || @request.method = "GET")`,
 			`status = "active"`,
 		},
 		{
-			"no ORs at all — unchanged",
+			"no ORs at all - unchanged",
 			`@request.auth.id != "" && status = "active"`,
 			`@request.auth.id != "" && status = "active"`,
 		},

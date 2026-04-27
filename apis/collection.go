@@ -350,7 +350,7 @@ func collectionRenderRule(e *core.RequestEvent) error {
 
 	cheapBranches, _ := search.AnalyzeCheapBranches(form.Rule)
 
-	// 1. Full SQL — compile the complete rule (parameterized by auth context)
+	// 1. Full SQL - compile the complete rule (parameterized by auth context)
 	fullResolver := core.NewRecordFieldResolver(e.App, collection, info, true)
 	fullExpr, err := search.FilterData(form.Rule).BuildExpr(fullResolver)
 	if err != nil {
@@ -363,7 +363,7 @@ func collectionRenderRule(e *core.RequestEvent) error {
 	}
 	fullSQL := fullQuery.Build().SQL()
 
-	// 2. Worst-case SQL — strip cheap @request.* OR branches
+	// 2. Worst-case SQL - strip cheap @request.* OR branches
 	worstCaseSQL := fullSQL
 	strippedRule, _ := search.StripCheapBranches(form.Rule)
 	if strippedRule != "" {

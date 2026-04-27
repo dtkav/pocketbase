@@ -9,7 +9,7 @@ import (
 )
 
 type shortCircuitResult struct {
-	passed    bool              // a cheap branch evaluated to true → rule passes
+	passed    bool              // a cheap branch evaluated to true; rule passes
 	remaining []fexpr.ExprGroup // expensive branches only (nil = no optimization possible)
 }
 
@@ -87,10 +87,10 @@ func simplifyNestedOrs(data []fexpr.ExprGroup, staticData map[string]any) shortC
 
 		switch {
 		case innerResult.passed:
-			// group is always true → skip (AND chain: no-op)
+			// group is always true - skip (AND chain: no-op)
 			anyModified = true
 		case innerResult.remaining != nil && len(innerResult.remaining) == 0:
-			// group is always false → entire AND chain is false
+			// group is always false - entire AND chain is false
 			return shortCircuitResult{remaining: []fexpr.ExprGroup{}}
 		case innerResult.remaining != nil:
 			anyModified = true
@@ -183,7 +183,7 @@ func isCheapToken(t fexpr.Token) bool {
 
 // evaluateCheapBranch evaluates a branch of ExprGroups against static data.
 // All identifiers must be @request.* fields. Returns false for any
-// unsupported construct (conservative — never incorrectly short-circuits).
+// unsupported construct (conservative: never incorrectly short-circuits).
 func evaluateCheapBranch(branch []fexpr.ExprGroup, staticData map[string]any) bool {
 	result := true
 
@@ -218,6 +218,12 @@ func evalGroup(group fexpr.ExprGroup, staticData map[string]any) bool {
 func evalExpr(expr fexpr.Expr, staticData map[string]any) bool {
 	left := resolveStaticToken(expr.Left, staticData)
 	right := resolveStaticToken(expr.Right, staticData)
+
+	// Match SQL NULL semantics: comparisons against missing request values
+	// don't satisfy the expression, including != comparisons.
+	if left == nil || right == nil {
+		return false
+	}
 
 	leftStr := fmt.Sprint(left)
 	rightStr := fmt.Sprint(right)
@@ -264,7 +270,7 @@ func resolveStaticToken(t fexpr.Token, staticData map[string]any) any {
 	}
 }
 
-// resolveStaticIdentifier resolves @request.auth.scopes → staticData["auth"]["scopes"]
+// resolveStaticIdentifier resolves @request.auth.scopes to staticData["auth"]["scopes"].
 func resolveStaticIdentifier(field string, staticData map[string]any) any {
 	// strip "@request." prefix
 	field = strings.TrimPrefix(field, "@request.")
@@ -422,7 +428,7 @@ func tokenToString(t fexpr.Token) string {
 
 // StripCheapBranches removes all cheap (in-memory @request.*) OR branches
 // from a rule and returns only the expensive remainder as a filter string.
-// This produces the worst-case rule — the path that actually hits the database.
+// This produces the worst-case rule: the path that actually hits the database.
 //
 // Returns empty string if the entire rule is cheap (no expensive branches).
 func StripCheapBranches(raw string) (string, error) {
@@ -473,7 +479,7 @@ func stripCheapFromGroups(data []fexpr.ExprGroup) []fexpr.ExprGroup {
 		return stripCheapFromNestedGroups(expensive)
 	}
 
-	// No top-level ORs — recurse into nested groups
+	// No top-level ORs - recurse into nested groups
 	return stripCheapFromNestedGroups(data)
 }
 
@@ -491,7 +497,7 @@ func stripCheapFromNestedGroups(data []fexpr.ExprGroup) []fexpr.ExprGroup {
 
 		stripped := stripCheapFromGroups(inner)
 		if stripped == nil || len(stripped) == 0 {
-			// Entire nested group was cheap — skip it from the AND chain
+			// Entire nested group was cheap - skip it from the AND chain
 			continue
 		}
 
