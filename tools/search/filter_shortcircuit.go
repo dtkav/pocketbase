@@ -305,3 +305,200 @@ func toFloats(a, b string) (float64, float64, bool) {
 	}
 	return af, bf, true
 }
+
+// CheapBranch represents an OR branch that can be resolved from in-memory
+// @request.* fields without hitting the database.
+type CheapBranch struct {
+	Expression string `json:"expression"`
+}
+
+// AnalyzeCheapBranches parses a filter rule and returns the list of OR branches
+// that only reference @request.* fields (cheap branches that short-circuit).
+func AnalyzeCheapBranches(raw string) ([]CheapBranch, error) {
+	if raw == "" {
+		return nil, nil
+	}
+
+	data, err := fexpr.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []CheapBranch
+
+	// Check top-level OR branches
+	branches := splitTopLevelOrs(data)
+	if len(branches) > 1 {
+		for _, branch := range branches {
+			if isCheapBranch(branch) {
+				result = append(result, CheapBranch{
+					Expression: branchToString(branch),
+				})
+			}
+		}
+	}
+
+	// Recurse into nested groups (AND chains with parenthesized ORs)
+	for _, group := range data {
+		result = append(result, findCheapBranchesInGroup(group)...)
+	}
+
+	return result, nil
+}
+
+// findCheapBranchesInGroup recurses into nested parenthesized groups to find
+// cheap OR branches within them.
+func findCheapBranchesInGroup(group fexpr.ExprGroup) []CheapBranch {
+	inner, ok := group.Item.([]fexpr.ExprGroup)
+	if !ok {
+		return nil
+	}
+
+	var result []CheapBranch
+
+	branches := splitTopLevelOrs(inner)
+	if len(branches) > 1 {
+		for _, branch := range branches {
+			if isCheapBranch(branch) {
+				result = append(result, CheapBranch{
+					Expression: branchToString(branch),
+				})
+			}
+		}
+	}
+
+	// Continue recursing
+	for _, g := range inner {
+		result = append(result, findCheapBranchesInGroup(g)...)
+	}
+
+	return result
+}
+
+// branchToString reconstructs a human-readable expression string from parsed
+// ExprGroup tokens.
+func branchToString(branch []fexpr.ExprGroup) string {
+	var parts []string
+	for i, group := range branch {
+		if i > 0 {
+			if group.Join == fexpr.JoinOr {
+				parts = append(parts, "||")
+			} else {
+				parts = append(parts, "&&")
+			}
+		}
+		parts = append(parts, groupToString(group))
+	}
+	return strings.Join(parts, " ")
+}
+
+func groupToString(group fexpr.ExprGroup) string {
+	switch item := group.Item.(type) {
+	case fexpr.Expr:
+		return exprToString(item)
+	case fexpr.ExprGroup:
+		return groupToString(item)
+	case []fexpr.ExprGroup:
+		return "(" + branchToString(item) + ")"
+	default:
+		return "?"
+	}
+}
+
+func exprToString(expr fexpr.Expr) string {
+	left := tokenToString(expr.Left)
+	right := tokenToString(expr.Right)
+	return left + " " + string(expr.Op) + " " + right
+}
+
+func tokenToString(t fexpr.Token) string {
+	switch t.Type {
+	case fexpr.TokenText:
+		return `"` + t.Literal + `"`
+	default:
+		return t.Literal
+	}
+}
+
+// StripCheapBranches removes all cheap (in-memory @request.*) OR branches
+// from a rule and returns only the expensive remainder as a filter string.
+// This produces the worst-case rule — the path that actually hits the database.
+//
+// Returns empty string if the entire rule is cheap (no expensive branches).
+func StripCheapBranches(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+
+	data, err := fexpr.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+
+	stripped := stripCheapFromGroups(data)
+	if stripped == nil || len(stripped) == 0 {
+		return "", nil
+	}
+
+	return branchToString(stripped), nil
+}
+
+// stripCheapFromGroups removes cheap OR branches at the current level
+// and recurses into nested groups.
+func stripCheapFromGroups(data []fexpr.ExprGroup) []fexpr.ExprGroup {
+	branches := splitTopLevelOrs(data)
+
+	if len(branches) > 1 {
+		// Filter out cheap branches, keep only expensive ones
+		var expensive []fexpr.ExprGroup
+		for _, branch := range branches {
+			if !isCheapBranch(branch) {
+				if len(expensive) == 0 && len(branch) > 0 {
+					// Fix join operator on first remaining branch
+					fixed := make([]fexpr.ExprGroup, len(branch))
+					copy(fixed, branch)
+					fixed[0].Join = fexpr.JoinAnd
+					expensive = append(expensive, fixed...)
+				} else {
+					expensive = append(expensive, branch...)
+				}
+			}
+		}
+
+		if len(expensive) == 0 {
+			return nil
+		}
+
+		// Recurse into the remaining expensive groups
+		return stripCheapFromNestedGroups(expensive)
+	}
+
+	// No top-level ORs — recurse into nested groups
+	return stripCheapFromNestedGroups(data)
+}
+
+// stripCheapFromNestedGroups walks an expression list and recurses into
+// any parenthesized groups to strip their cheap branches.
+func stripCheapFromNestedGroups(data []fexpr.ExprGroup) []fexpr.ExprGroup {
+	result := make([]fexpr.ExprGroup, 0, len(data))
+
+	for _, group := range data {
+		inner, ok := group.Item.([]fexpr.ExprGroup)
+		if !ok {
+			result = append(result, group)
+			continue
+		}
+
+		stripped := stripCheapFromGroups(inner)
+		if stripped == nil || len(stripped) == 0 {
+			// Entire nested group was cheap — skip it from the AND chain
+			continue
+		}
+
+		newGroup := group
+		newGroup.Item = stripped
+		result = append(result, newGroup)
+	}
+
+	return result
+}
