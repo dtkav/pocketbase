@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ganigeorgiev/fexpr"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/tools/inflector"
 	"github.com/pocketbase/pocketbase/tools/search"
@@ -32,6 +33,9 @@ type ruleJoin struct {
 
 // ensure that `search.FieldResolver` interface is implemented
 var _ search.FieldResolver = (*RecordFieldResolver)(nil)
+
+// ensure that `search.StaticResolver` interface is implemented
+var _ search.StaticResolver = (*RecordFieldResolver)(nil)
 
 // RecordFieldResolver defines a custom search resolver struct for
 // managing Record model search fields.
@@ -79,6 +83,49 @@ func (r *RecordFieldResolver) AllowHiddenFields() bool {
 // SetAllowHiddenFields enables or disables hidden fields filtering.
 func (r *RecordFieldResolver) SetAllowHiddenFields(allowHiddenFields bool) {
 	r.allowHiddenFields = allowHiddenFields
+}
+
+// EvaluateStaticExpr implements `search.StaticResolver` by compiling the
+// already parsed expression through the regular filter builder and asking
+// SQLite to evaluate the resulting scalar SQL. This keeps the optimizer tied
+// to the same placeholder, null, type coercion and LIKE semantics used by the
+// final query.
+func (r *RecordFieldResolver) EvaluateStaticExpr(data []fexpr.ExprGroup) (bool, bool, error) {
+	cloneR := *r
+	cloneR.joins = []*search.Join{}
+	cloneR.listRuleJoins = nil
+
+	expr, err := search.BuildParsedFilterExpr(data, &cloneR, search.DefaultFilterExprLimit)
+	if err != nil {
+		return false, false, err
+	}
+
+	params := dbx.Params{}
+	rawSQL := expr.Build(nil, params)
+
+	if strings.Contains(rawSQL, "[[") || strings.Contains(rawSQL, "{{") {
+		return false, false, nil
+	}
+
+	var result int
+	err = r.app.ConcurrentDB().
+		NewQuery("SELECT CASE WHEN (" + rawSQL + ") THEN 1 ELSE 0 END").
+		Bind(params).
+		Row(&result)
+	if err != nil {
+		return false, false, err
+	}
+
+	return result == 1, true, nil
+}
+
+// ValidateStaticExpr builds the original expression before an optimized
+// equivalent is returned. This validates all branches and intentionally keeps
+// resolver side effects such as joins and related collection ListRule checks
+// because they are part of PocketBase's query semantics.
+func (r *RecordFieldResolver) ValidateStaticExpr(data []fexpr.ExprGroup, maxExpressions int) error {
+	_, err := search.BuildParsedFilterExpr(data, r, maxExpressions)
+	return err
 }
 
 // NewRecordFieldResolver creates and initializes a new `RecordFieldResolver`.

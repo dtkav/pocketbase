@@ -7,12 +7,26 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ganigeorgiev/fexpr"
+	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
 	"github.com/pocketbase/pocketbase/tools/list"
 	"github.com/pocketbase/pocketbase/tools/search"
 	"github.com/pocketbase/pocketbase/tools/types"
 )
+
+type nonStaticRecordResolver struct {
+	inner *core.RecordFieldResolver
+}
+
+func (r *nonStaticRecordResolver) Resolve(fieldName string) (*search.ResolverResult, error) {
+	return r.inner.Resolve(fieldName)
+}
+
+func (r *nonStaticRecordResolver) UpdateQuery(query *dbx.SelectQuery) error {
+	return r.inner.UpdateQuery(query)
+}
 
 func TestRecordFieldResolverAllowedFields(t *testing.T) {
 	t.Parallel()
@@ -78,6 +92,375 @@ func TestRecordFieldResolverAllowHiddenFields(t *testing.T) {
 	if allowHiddenFields != expected {
 		t.Fatalf("Expected changed allowHiddenFields %v, got %v", expected, allowHiddenFields)
 	}
+}
+
+func TestRecordFieldResolverEvaluateStaticExpr(t *testing.T) {
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	collection, err := app.FindCollectionByNameOrId("demo4")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	authRecord, err := app.FindRecordById("users", "4q1xlclmfloku33")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	authResolver := core.NewRecordFieldResolver(app, collection, &core.RequestInfo{
+		Context: "default",
+		Method:  "GET",
+		Auth:    authRecord,
+		Query:   map[string]string{"filter": "test"},
+		Headers: map[string]string{},
+		Body:    map[string]any{"date": "2024-04-27"},
+	}, true)
+
+	guestResolver := core.NewRecordFieldResolver(app, collection, &core.RequestInfo{
+		Context: "default",
+		Method:  "GET",
+		Query:   map[string]string{},
+		Headers: map[string]string{},
+		Body:    map[string]any{},
+	}, true)
+
+	scenarios := []struct {
+		name     string
+		resolver *core.RecordFieldResolver
+		expr     string
+		matched  bool
+		ok       bool
+	}{
+		{
+			"plain auth field matches",
+			authResolver,
+			`@request.auth.collectionName = "users"`,
+			true,
+			true,
+		},
+		{
+			"boolean auth field uses SQL numeric truth",
+			authResolver,
+			`@request.auth.verified = 0`,
+			true,
+			true,
+		},
+		{
+			"missing auth does not satisfy not-empty guard",
+			guestResolver,
+			`@request.auth.id != ""`,
+			false,
+			true,
+		},
+		{
+			"missing request auth field uses scalar SQL truth",
+			authResolver,
+			`@request.auth.missing = ""`,
+			true,
+			true,
+		},
+		{
+			"request auth relation is not static",
+			authResolver,
+			`@request.auth.rel.title = "test"`,
+			false,
+			false,
+		},
+		{
+			"missing request auth relation field uses scalar SQL truth",
+			authResolver,
+			`@request.auth.rel.missing = ""`,
+			true,
+			true,
+		},
+		{
+			"generated relation list rule guest branch is false",
+			guestResolver,
+			`@request.auth.id != "" && @request.auth.collectionName != "users"`,
+			false,
+			true,
+		},
+		{
+			"static token function uses SQL semantics",
+			authResolver,
+			`strftime("%Y", @request.body.date) = "2024"`,
+			true,
+			true,
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			data, err := fexpr.Parse(s.expr)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			matched, ok, err := s.resolver.EvaluateStaticExpr(data)
+			if err != nil {
+				t.Fatalf("EvaluateStaticExpr failed: %v", err)
+			}
+			if ok != s.ok {
+				t.Fatalf("expected ok %v, got %v", s.ok, ok)
+			}
+			if matched != s.matched {
+				t.Fatalf("expected matched %v, got %v", s.matched, matched)
+			}
+		})
+	}
+}
+
+func TestRecordFieldResolverStaticOptimizerDoesNotHideResolverErrors(t *testing.T) {
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	collection, err := app.FindCollectionByNameOrId("demo4")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := core.NewRecordFieldResolver(app, collection, &core.RequestInfo{
+		Context: "default",
+		Method:  "GET",
+		Query:   map[string]string{},
+		Headers: map[string]string{},
+		Body:    map[string]any{},
+	}, true)
+
+	_, err = search.FilterData(`@request.context = "default" || missing = 1`).BuildExpr(resolver)
+	if err == nil {
+		t.Fatal("expected resolver error from the non-static branch")
+	}
+}
+
+func TestRecordFieldResolverStaticOptimizerEquivalentResults(t *testing.T) {
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	userAuth, err := app.FindRecordById("users", "4q1xlclmfloku33")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientAuth, err := app.FindRecordById("clients", "gk390qegs4y47wn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	guestInfo := &core.RequestInfo{
+		Context: "default",
+		Method:  "GET",
+		Query:   map[string]string{},
+		Headers: map[string]string{},
+		Body:    map[string]any{},
+	}
+	userInfo := &core.RequestInfo{
+		Context: "default",
+		Method:  "GET",
+		Auth:    userAuth,
+		Query:   map[string]string{},
+		Headers: map[string]string{},
+		Body:    map[string]any{},
+	}
+	clientInfo := &core.RequestInfo{
+		Context: "default",
+		Method:  "GET",
+		Auth:    clientAuth,
+		Query:   map[string]string{},
+		Headers: map[string]string{},
+		Body:    map[string]any{},
+	}
+	updateInfo := &core.RequestInfo{
+		Context: "ctx",
+		Method:  "GET",
+		Auth:    userAuth,
+		Query: map[string]string{
+			"a": "",
+			"b": "123",
+		},
+		Headers: map[string]string{
+			"a": "123",
+			"b": "456",
+		},
+		Body: map[string]any{
+			"a":                  nil,
+			"b":                  123,
+			"c":                  map[string]any{"sub": 1},
+			"date":               "2024-04-27",
+			"number":             10,
+			"rel_one":            "test",
+			"rel_many":           []string{"test1", "test2"},
+			"rel_many_cascade":   []string{"test1", "test2"},
+			"rel_one_cascade":    "test1",
+			"rel_one_no_cascade": "test1",
+			"self_rel_many":      []string{"test1"},
+		},
+	}
+
+	scenarios := []struct {
+		name             string
+		collection       string
+		rule             string
+		info             *core.RequestInfo
+		allowHiddenField bool
+	}{
+		{
+			"guest relation list rule remains restrictive",
+			"demo4",
+			`rel_many_no_cascade_required.files:length ?= 2`,
+			guestInfo,
+			false,
+		},
+		{
+			"client relation list rule allows matching related records",
+			"demo4",
+			`rel_many_no_cascade_required.files:length ?= 2`,
+			clientInfo,
+			false,
+		},
+		{
+			"true static OR branch removes expensive joins equivalently",
+			"demo4",
+			`@request.auth.collectionName = "users" || rel_one_cascade.created > 1`,
+			userInfo,
+			false,
+		},
+		{
+			"false static OR branch keeps expensive relation filter equivalently",
+			"demo4",
+			`@request.auth.collectionName = "bots" || rel_one_cascade.created > 1`,
+			userInfo,
+			false,
+		},
+		{
+			"nested static branch in AND chain",
+			"demo4",
+			`title != "" && (@request.auth.collectionName = "users" || rel_one_cascade.created > 1)`,
+			userInfo,
+			false,
+		},
+		{
+			"request auth true branch preserves auth relation side effects",
+			"demo4",
+			`@request.auth.id > true || @request.auth.username > true || @request.auth.rel.title > true || @request.body.demo < true`,
+			updateInfo,
+			true,
+		},
+		{
+			"all false request static branches stay false",
+			"demo4",
+			`@request.context = true || @request.query.a = true || @request.query.b = true || @request.query.missing = true || @request.headers.a = true || @request.headers.missing = true`,
+			updateInfo,
+			true,
+		},
+		{
+			"collection list rule static branch remains restrictive",
+			"demo4",
+			`@collection.demo3.title > true`,
+			updateInfo,
+			false,
+		},
+		{
+			"hidden public auth collection branch with static true auth branch",
+			"demo4",
+			`@collection.nologin.email > true || @request.auth.email > true`,
+			updateInfo,
+			false,
+		},
+		{
+			"hidden superuser auth collection branch with static true auth branch",
+			"demo4",
+			`@collection.users.email > true || @request.auth.email > true`,
+			updateInfo,
+			true,
+		},
+		{
+			"request lower modifier static branches",
+			"demo1",
+			`@request.body.a:lower > true || @request.body.b:lower > true || @request.body.c:lower > true || @request.query.a:lower > true || @request.query.b:lower > true || @request.query.c:lower > true || @request.headers.a:lower > true || @request.headers.c:lower > true`,
+			updateInfo,
+			false,
+		},
+		{
+			"request isset modifier false branches",
+			"demo1",
+			`@request.body.a:isset > true || @request.body.b:isset > true || @request.body.c:isset > true || @request.query.a:isset > true || @request.query.b:isset > true || @request.query.c:isset > true || @request.headers.a:isset > true || @request.headers.c:isset > true`,
+			updateInfo,
+			false,
+		},
+		{
+			"request body relation list rules preserve side effects",
+			"demo4",
+			`@request.body.rel_one_cascade.title > true && @request.body.rel_one_no_cascade.title < true && @request.body.self_rel_many.title = true`,
+			updateInfo,
+			false,
+		},
+		{
+			"static token function branch uses SQL truth value",
+			"demo4",
+			`strftime("%Y", @request.body.date) = "2024" || rel_one_cascade.created > 1`,
+			updateInfo,
+			false,
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			optimized := queryRecordIds(t, app, s.collection, s.rule, s.info, s.allowHiddenField, true)
+			unoptimized := queryRecordIds(t, app, s.collection, s.rule, s.info, s.allowHiddenField, false)
+
+			if !slices.Equal(optimized, unoptimized) {
+				t.Fatalf("optimized ids differ from unoptimized ids\noptimized:   %v\nunoptimized: %v", optimized, unoptimized)
+			}
+		})
+	}
+}
+
+func queryRecordIds(
+	t *testing.T,
+	app core.App,
+	collectionNameOrId string,
+	rule string,
+	info *core.RequestInfo,
+	allowHiddenFields bool,
+	useStaticOptimizer bool,
+) []string {
+	t.Helper()
+
+	collection, err := app.FindCollectionByNameOrId(collectionNameOrId)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := core.NewRecordFieldResolver(app, collection, info, allowHiddenFields)
+
+	var resolver search.FieldResolver = r
+	if !useStaticOptimizer {
+		resolver = &nonStaticRecordResolver{inner: r}
+	}
+
+	expr, err := search.FilterData(rule).BuildExpr(resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	query := app.RecordQuery(collection).OrderBy("id ASC")
+	if err := resolver.UpdateQuery(query); err != nil {
+		t.Fatal(err)
+	}
+
+	var records []*core.Record
+	if err := query.AndWhere(expr).All(&records); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := make([]string, len(records))
+	for i, record := range records {
+		ids[i] = record.Id
+	}
+
+	return ids
 }
 
 func TestRecordFieldResolverUpdateQuery(t *testing.T) {
@@ -173,7 +556,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo4",
 			"rel_one_cascade.created > true",
 			false,
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `demo4_rel_one_cascade` ON [[demo4_rel_one_cascade.id]] = [[demo4.rel_one_cascade]] WHERE ((([[demo4_rel_one_cascade.id]] = '' OR [[demo4_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND ([[demo4_rel_one_cascade.created]] > 1)",
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `demo4_rel_one_cascade` ON [[demo4_rel_one_cascade.id]] = [[demo4.rel_one_cascade]] WHERE ((([[demo4_rel_one_cascade.id]] = '' OR [[demo4_rel_one_cascade.id]] IS NULL))) AND ([[demo4_rel_one_cascade.created]] > 1)",
 		},
 		{
 			"rel to collection with non-empty list rule (with allowHiddenFields)",
@@ -208,14 +591,14 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo4",
 			"self_rel_one.rel_one_cascade.created > true",
 			false,
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo4` `demo4_self_rel_one` ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN `demo3` `demo4_self_rel_one_rel_one_cascade` ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE ((([[demo4_self_rel_one_rel_one_cascade.id]] = '' OR [[demo4_self_rel_one_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND ([[demo4_self_rel_one_rel_one_cascade.created]] > 1)",
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo4` `demo4_self_rel_one` ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN `demo3` `demo4_self_rel_one_rel_one_cascade` ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE ((([[demo4_self_rel_one_rel_one_cascade.id]] = '' OR [[demo4_self_rel_one_rel_one_cascade.id]] IS NULL))) AND ([[demo4_self_rel_one_rel_one_cascade.created]] > 1)",
 		},
 		{
 			"nested rels with non-empty list rule (joins reuse test)",
 			"demo4",
 			"self_rel_one.rel_one_cascade.created > true && self_rel_one.rel_one_cascade.updated > true",
 			false,
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo4` `demo4_self_rel_one` ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN `demo3` `demo4_self_rel_one_rel_one_cascade` ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE ((([[demo4_self_rel_one_rel_one_cascade.id]] = '' OR [[demo4_self_rel_one_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND (([[demo4_self_rel_one_rel_one_cascade.created]] > 1 AND [[demo4_self_rel_one_rel_one_cascade.updated]] > 1))",
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo4` `demo4_self_rel_one` ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN `demo3` `demo4_self_rel_one_rel_one_cascade` ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE ((([[demo4_self_rel_one_rel_one_cascade.id]] = '' OR [[demo4_self_rel_one_rel_one_cascade.id]] IS NULL))) AND (([[demo4_self_rel_one_rel_one_cascade.created]] > 1 AND [[demo4_self_rel_one_rel_one_cascade.updated]] > 1))",
 		},
 		{
 			"nested rels with non-empty list rule (with allowHiddenFields)",
@@ -341,7 +724,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo3",
 			"demo4_via_rel_many_cascade.rel_one_cascade.demo4_via_rel_many_cascade.id ?= true",
 			false,
-			"SELECT DISTINCT `demo3`.* FROM `demo3` LEFT JOIN `demo4` `demo3_demo4_via_rel_many_cascade` ON [[demo3.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]), json_type([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]])='array', FALSE) THEN [[demo3_demo4_via_rel_many_cascade.rel_many_cascade]] ELSE json_array([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade}}) LEFT JOIN `demo3` `demo3_demo4_via_rel_many_cascade_rel_one_cascade` ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] = [[demo3_demo4_via_rel_many_cascade.rel_one_cascade]] LEFT JOIN `demo4` `demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade` ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]), json_type([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]])='array', FALSE) THEN [[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]] ELSE json_array([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade}}) WHERE ((([[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] = '' OR [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND ([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.id]] = 1)",
+			"SELECT DISTINCT `demo3`.* FROM `demo3` LEFT JOIN `demo4` `demo3_demo4_via_rel_many_cascade` ON [[demo3.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]), json_type([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]])='array', FALSE) THEN [[demo3_demo4_via_rel_many_cascade.rel_many_cascade]] ELSE json_array([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade}}) LEFT JOIN `demo3` `demo3_demo4_via_rel_many_cascade_rel_one_cascade` ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] = [[demo3_demo4_via_rel_many_cascade.rel_one_cascade]] LEFT JOIN `demo4` `demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade` ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]), json_type([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]])='array', FALSE) THEN [[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]] ELSE json_array([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade}}) WHERE ((([[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] = '' OR [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] IS NULL))) AND ([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.id]] = 1)",
 		},
 		{
 			"recursive back relations with non-empty list rule (with allowHiddenFields)",
@@ -369,14 +752,14 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo4",
 			"@request.auth.id > true || @request.auth.username > true || @request.auth.rel.title > true || @request.body.demo < true || @request.auth.missingA.missingB > false",
 			true,
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `users` `__auth_users` ON `__auth_users`.`id`={:p0} LEFT JOIN `demo2` `__auth_users_rel` ON [[__auth_users_rel.id]] = [[__auth_users.rel]] WHERE ({:TEST} > 1 OR [[__auth_users.username]] > 1 OR [[__auth_users_rel.title]] > 1 OR NULL < 1 OR NULL > 0)",
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `users` `__auth_users` ON `__auth_users`.`id`={:p0} LEFT JOIN `demo2` `__auth_users_rel` ON [[__auth_users_rel.id]] = [[__auth_users.rel]] WHERE 1=1",
 		},
 		{
 			"@request.* static fields",
 			"demo4",
 			"@request.context = true || @request.query.a = true || @request.query.b = true || @request.query.missing = true || @request.headers.a = true || @request.headers.missing = true",
 			true,
-			"SELECT `demo4`.* FROM `demo4` WHERE ({:TEST} = 1 OR '' = 1 OR {:TEST} = 1 OR '' = 1 OR {:TEST} = 1 OR '' = 1)",
+			"SELECT `demo4`.* FROM `demo4` WHERE 0=1",
 		},
 		{
 			"direct hidden field (add emailVisibility)",
@@ -404,7 +787,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo4",
 			"@collection.nologin.email > true || @request.auth.email > true",
 			false,
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `nologin` `__collection_nologin` WHERE ((((([[__collection_nologin.email]] > 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_nologin.email]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `nologin` `__mm___collection_nologin` WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] > 1))))) AND ([[__collection_nologin.emailVisibility]] = TRUE)) OR {:TEST} > 1)",
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `nologin` `__collection_nologin` WHERE 1=1",
 		},
 		{
 			"system filters in a superuser auth collection with hidden field and NO allowHiddenFields (multi-match and add emailVisibility)",
@@ -418,14 +801,14 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo4",
 			"@collection.users.email > true || @request.auth.email > true",
 			true,
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `users` `__collection_users` WHERE ((([[__collection_users.email]] > 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_users.email]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `users` `__mm___collection_users` WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] > 1)))) OR {:TEST} > 1)",
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `users` `__collection_users` WHERE 1=1",
 		},
 		{
 			"collection filter in a non-empty list rule collection",
 			"demo4",
 			"@collection.demo3.title > true",
 			false,
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `__collection_demo3` WHERE ((([[__collection_demo3.id]] = '' OR [[__collection_demo3.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND (((([[__collection_demo3.title]] > 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_demo3.title]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `demo3` `__mm___collection_demo3` WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] > 1))))))",
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `__collection_demo3` WHERE ((([[__collection_demo3.id]] = '' OR [[__collection_demo3.id]] IS NULL))) AND (((([[__collection_demo3.title]] > 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_demo3.title]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `demo3` `__mm___collection_demo3` WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] > 1))))))",
 		},
 		{
 			"collection filter in a non-empty list rule collection (with allowHiddenFields)",
@@ -456,7 +839,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 				"rel_many.name:lower > true ||" +
 				"created:lower > true",
 			true,
-			"SELECT DISTINCT `demo1`.* FROM `demo1` LEFT JOIN `users` `__data_users_rel_many` ON [[__data_users_rel_many.id]] IN ({:p0}, {:p1}) LEFT JOIN json_each(CASE WHEN iif(json_valid([[demo1.rel_many]]), json_type([[demo1.rel_many]])='array', FALSE) THEN [[demo1.rel_many]] ELSE json_array([[demo1.rel_many]]) END) `__je_demo1_rel_many` LEFT JOIN `users` `demo1_rel_many` ON [[demo1_rel_many.id]] = [[__je_demo1_rel_many.value]] WHERE (LOWER({:infoLowerrel_oneTEST}) > 1 OR LOWER({:infoLowerrel_manyTEST}) > 1 OR ((LOWER([[__data_users_rel_many.email]]) > 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT LOWER([[__mm___data_users_rel_many.email]]) as [[multiMatchValue]] FROM `demo1` `__mm_demo1` LEFT JOIN `users` `__mm___data_users_rel_many` ON [[__mm___data_users_rel_many.id]] IN ({:p4}, {:p5}) WHERE `__mm_demo1`.`id` = `demo1`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] > 1)))) OR LOWER([[demo1.text]]) > 1 OR LOWER([[demo1.bool]]) > 1 OR LOWER([[demo1.url]]) > 1 OR LOWER([[demo1.select_one]]) > 1 OR LOWER([[demo1.select_many]]) > 1 OR LOWER([[demo1.file_one]]) > 1 OR LOWER([[demo1.file_many]]) > 1 OR LOWER([[demo1.number]]) > 1 OR LOWER([[demo1.email]]) > 1 OR LOWER([[demo1.datetime]]) > 1 OR LOWER((CASE WHEN json_valid([[demo1.json]]) THEN JSON_EXTRACT([[demo1.json]], '$') ELSE JSON_EXTRACT(json_object('pb', [[demo1.json]]), '$.pb') END)) > 1 OR LOWER([[demo1.rel_one]]) > 1 OR LOWER([[demo1.rel_many]]) > 1 OR ((LOWER([[demo1_rel_many.name]]) > 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT LOWER([[__mm_demo1_rel_many.name]]) as [[multiMatchValue]] FROM `demo1` `__mm_demo1` LEFT JOIN json_each(CASE WHEN iif(json_valid([[__mm_demo1.rel_many]]), json_type([[__mm_demo1.rel_many]])='array', FALSE) THEN [[__mm_demo1.rel_many]] ELSE json_array([[__mm_demo1.rel_many]]) END) `__mm_demo1_rel_many_je` LEFT JOIN `users` `__mm_demo1_rel_many` ON [[__mm_demo1_rel_many.id]] = [[__mm_demo1_rel_many_je.value]] WHERE `__mm_demo1`.`id` = `demo1`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] > 1)))) OR LOWER([[demo1.created]]) > 1)",
+			"SELECT DISTINCT `demo1`.* FROM `demo1` LEFT JOIN `users` `__data_users_rel_many` ON [[__data_users_rel_many.id]] IN ({:p0}, {:p1}) LEFT JOIN json_each(CASE WHEN iif(json_valid([[demo1.rel_many]]), json_type([[demo1.rel_many]])='array', FALSE) THEN [[demo1.rel_many]] ELSE json_array([[demo1.rel_many]]) END) `__je_demo1_rel_many` LEFT JOIN `users` `demo1_rel_many` ON [[demo1_rel_many.id]] = [[__je_demo1_rel_many.value]] WHERE 1=1",
 		},
 		{
 			"static @request fields with :lower modifier",
@@ -470,7 +853,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 				"@request.headers.a:lower > true ||" +
 				"@request.headers.c:lower > true",
 			false,
-			"SELECT `demo1`.* FROM `demo1` WHERE (NULL > 1 OR LOWER({:TEST}) > 1 OR NULL > 1 OR LOWER({:TEST}) > 1 OR LOWER({:TEST}) > 1 OR NULL > 1 OR LOWER({:TEST}) > 1 OR NULL > 1)",
+			"SELECT `demo1`.* FROM `demo1` WHERE 1=1",
 		},
 		{
 			"isset modifier",
@@ -484,7 +867,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 				"@request.headers.a:isset > true ||" +
 				"@request.headers.c:isset > true",
 			false,
-			"SELECT `demo1`.* FROM `demo1` WHERE (TRUE > 1 OR TRUE > 1 OR FALSE > 1 OR TRUE > 1 OR TRUE > 1 OR FALSE > 1 OR TRUE > 1 OR FALSE > 1)",
+			"SELECT `demo1`.* FROM `demo1` WHERE 0=1",
 		},
 		{
 			"@request.body.rel.* fields",
@@ -495,7 +878,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 				// different collection
 				"@request.body.self_rel_many.title = true",
 			false,
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `__data_demo3_rel_one_cascade` ON [[__data_demo3_rel_one_cascade.id]]={:p0} LEFT JOIN `demo3` `__data_demo3_rel_one_no_cascade` ON [[__data_demo3_rel_one_no_cascade.id]]={:p1} LEFT JOIN `demo4` `__data_demo4_self_rel_many` ON [[__data_demo4_self_rel_many.id]]={:p2} WHERE (((([[__data_demo3_rel_one_cascade.id]] = '' OR [[__data_demo3_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND ((([[__data_demo3_rel_one_no_cascade.id]] = '' OR [[__data_demo3_rel_one_no_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST})))) AND (([[__data_demo3_rel_one_cascade.title]] > 1 AND [[__data_demo3_rel_one_no_cascade.title]] < 1 AND (([[__data_demo4_self_rel_many.title]] = 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___data_demo4_self_rel_many.title]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `demo4` `__mm___data_demo4_self_rel_many` ON [[__mm___data_demo4_self_rel_many.id]]={:p13} WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] = 1))))))",
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `__data_demo3_rel_one_cascade` ON [[__data_demo3_rel_one_cascade.id]]={:p0} LEFT JOIN `demo3` `__data_demo3_rel_one_no_cascade` ON [[__data_demo3_rel_one_no_cascade.id]]={:p1} LEFT JOIN `demo4` `__data_demo4_self_rel_many` ON [[__data_demo4_self_rel_many.id]]={:p2} WHERE (((([[__data_demo3_rel_one_cascade.id]] = '' OR [[__data_demo3_rel_one_cascade.id]] IS NULL))) AND ((([[__data_demo3_rel_one_no_cascade.id]] = '' OR [[__data_demo3_rel_one_no_cascade.id]] IS NULL)))) AND (([[__data_demo3_rel_one_cascade.title]] > 1 AND [[__data_demo3_rel_one_no_cascade.title]] < 1 AND (([[__data_demo4_self_rel_many.title]] = 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___data_demo4_self_rel_many.title]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `demo4` `__mm___data_demo4_self_rel_many` ON [[__mm___data_demo4_self_rel_many.id]]={:p5} WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] = 1))))))",
 		},
 		{
 			"@request.body.arrayble:each fields",
