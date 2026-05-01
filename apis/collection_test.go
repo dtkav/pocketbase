@@ -1768,3 +1768,63 @@ func TestCollectionTestView(t *testing.T) {
 		scenario.Test(t)
 	}
 }
+
+func TestCollectionRenderRule(t *testing.T) {
+	t.Parallel()
+
+	body := `{"rule":"@request.auth.collectionName = \"users\" || rel_one_cascade.created > true","authCollectionId":"users","authId":"4q1xlclmfloku33"}`
+
+	scenarios := []tests.ApiScenario{
+		{
+			Name:            "unauthorized",
+			Method:          http.MethodPost,
+			URL:             "/api/collections/demo4/render-rule",
+			Body:            strings.NewReader(body),
+			ExpectedStatus:  401,
+			ExpectedContent: []string{`"data":{}`},
+			ExpectedEvents:  map[string]int{"*": 0},
+		},
+		{
+			Name:   "authorized as regular user",
+			Method: http.MethodPost,
+			URL:    "/api/collections/demo4/render-rule",
+			Body:   strings.NewReader(body),
+			Headers: map[string]string{
+				"Authorization": "eyJhbGciOiJIUzI1NiJ9.eyJpZCI6IjRxMXhsY2xtZmxva3UzMyIsInR5cGUiOiJhdXRoIiwiY29sbGVjdGlvbklkIjoiX3BiX3VzZXJzX2F1dGhfIiwiZXhwIjoyNTI0NjA0NDYxLCJyZWZyZXNoYWJsZSI6dHJ1ZX0.ZT3F0Z3iM-xbGgSG3LEKiEzHrPHr8t8IuHLZGGNuxLo",
+			},
+			ExpectedStatus:  403,
+			ExpectedContent: []string{`"data":{}`},
+			ExpectedEvents:  map[string]int{"*": 0},
+		},
+		{
+			Name:   "authorized as superuser",
+			Method: http.MethodPost,
+			URL:    "/api/collections/demo4/render-rule",
+			Body:   strings.NewReader(body),
+			Headers: map[string]string{
+				"Authorization": "eyJhbGciOiJIUzI1NiJ9.eyJpZCI6InN5d2JoZWNuaDQ2cmhtMCIsInR5cGUiOiJhdXRoIiwiY29sbGVjdGlvbklkIjoicGJjXzMxNDI2MzU4MjMiLCJleHAiOjI1MjQ2MDQ0NjEsInJlZnJlc2hhYmxlIjp0cnVlfQ.UXgO3j-0BumcugrFjbd7j0M4MQvbrLggLlcu_YNGjoY",
+			},
+			ExpectedStatus: 200,
+			ExpectedContent: []string{
+				`"sql":"SELECT`,
+				`"worstCaseSql":"SELECT`,
+				`"cheapBranches":[{"expression":"@request.auth.collectionName = \"users\""}]`,
+			},
+		},
+		{
+			Name:   "empty rule",
+			Method: http.MethodPost,
+			URL:    "/api/collections/demo4/render-rule",
+			Body:   strings.NewReader(`{"rule":""}`),
+			Headers: map[string]string{
+				"Authorization": "eyJhbGciOiJIUzI1NiJ9.eyJpZCI6InN5d2JoZWNuaDQ2cmhtMCIsInR5cGUiOiJhdXRoIiwiY29sbGVjdGlvbklkIjoicGJjXzMxNDI2MzU4MjMiLCJleHAiOjI1MjQ2MDQ0NjEsInJlZnJlc2hhYmxlIjp0cnVlfQ.UXgO3j-0BumcugrFjbd7j0M4MQvbrLggLlcu_YNGjoY",
+			},
+			ExpectedStatus:  400,
+			ExpectedContent: []string{`"message":"Rule is required."`},
+		},
+	}
+
+	for _, scenario := range scenarios {
+		scenario.Test(t)
+	}
+}
